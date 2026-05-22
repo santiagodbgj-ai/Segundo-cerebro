@@ -5,9 +5,32 @@ const TIPOS = ['seguimiento', 'cotizacion', 'idea', 'tarea'];
 const TIPO_LABELS = { seguimiento: 'Seguim.', cotizacion: 'Cotiz.', idea: 'Idea', tarea: 'Tarea' };
 const STORAGE_KEY = 'sc_interactions';
 
+function pad(n) { return String(n).padStart(2, '0'); }
+
+function defaultReminderAt() {
+  const d = new Date();
+  d.setDate(d.getDate() + 3);
+  d.setHours(9, 0, 0, 0);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T09:00`;
+}
+
+function emptyForm() {
+  return { project: 'HBK', tipo: 'seguimiento', client: '', description: '', reminderAt: defaultReminderAt() };
+}
+
 function loadData() {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+    const items = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+    // migrar items viejos que usaban reminderDays
+    return items.map(item => {
+      if (!item.reminderAt && item.reminderDays) {
+        const created = new Date(item.createdAt);
+        const target = new Date(created.getTime() + item.reminderDays * 86400000);
+        target.setHours(9, 0, 0, 0);
+        return { ...item, reminderAt: target.toISOString() };
+      }
+      return item;
+    });
   } catch {
     return [];
   }
@@ -18,9 +41,7 @@ function saveData(items) {
 }
 
 function daysUntilReminder(item) {
-  const created = new Date(item.createdAt);
-  const target = new Date(created.getTime() + item.reminderDays * 86400000);
-  return Math.ceil((target - Date.now()) / 86400000);
+  return Math.ceil((new Date(item.reminderAt) - Date.now()) / 86400000);
 }
 
 function formatDate(iso) {
@@ -28,13 +49,21 @@ function formatDate(iso) {
   return d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' });
 }
 
+function formatReminder(item) {
+  const t = new Date(item.reminderAt);
+  const date = t.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
+  const time = t.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+  return `${date} ${time}`;
+}
+
 function ReminderTag({ item }) {
   const days = daysUntilReminder(item);
+  const label = formatReminder(item);
   if (days < 0) {
     return (
       <span className="reminder-tag overdue">
         <span className="dot overdue" />
-        hace {Math.abs(days)}d
+        vencido · {label}
       </span>
     );
   }
@@ -42,14 +71,14 @@ function ReminderTag({ item }) {
     return (
       <span className="reminder-tag due-soon">
         <span className="dot due-soon" />
-        en {days}d
+        pronto · {label}
       </span>
     );
   }
   return (
     <span className="reminder-tag ok">
       <span className="dot ok" />
-      en {days}d
+      {label}
     </span>
   );
 }
@@ -78,11 +107,9 @@ function InteractionCard({ item, onDelete }) {
   );
 }
 
-const EMPTY_FORM = { project: 'HBK', tipo: 'seguimiento', client: '', description: '', reminderDays: 3 };
-
 export default function App() {
   const [items, setItems] = useState(loadData);
-  const [form, setForm] = useState(EMPTY_FORM);
+  const [form, setForm] = useState(emptyForm);
   const [filterProject, setFilterProject] = useState('todos');
   const [filterTipo, setFilterTipo] = useState('todos');
   const [search, setSearch] = useState('');
@@ -100,14 +127,15 @@ export default function App() {
     if (!form.client.trim() || !form.description.trim()) return;
     const newItem = {
       id: Date.now().toString(),
-      ...form,
+      project: form.project,
+      tipo: form.tipo,
       client: form.client.trim(),
       description: form.description.trim(),
-      reminderDays: Number(form.reminderDays) || 3,
+      reminderAt: form.reminderAt || defaultReminderAt(),
       createdAt: new Date().toISOString(),
     };
     setItems(prev => [newItem, ...prev]);
-    setForm(EMPTY_FORM);
+    setForm(emptyForm());
     showToast('Interacción registrada');
   }
 
@@ -216,17 +244,13 @@ export default function App() {
             </div>
 
             <div className="field">
-              <label>Recordatorio</label>
-              <div className="days-row">
-                <input
-                  type="number"
-                  min="1"
-                  max="365"
-                  value={form.reminderDays}
-                  onChange={e => setForm(f => ({ ...f, reminderDays: e.target.value }))}
-                />
-                <span>días a partir de hoy</span>
-              </div>
+              <label>Recordatorio — fecha y hora</label>
+              <input
+                type="datetime-local"
+                value={form.reminderAt}
+                onChange={e => setForm(f => ({ ...f, reminderAt: e.target.value }))}
+                required
+              />
             </div>
 
             <button type="submit" className="btn-submit">+ Registrar</button>
